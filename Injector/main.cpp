@@ -1,55 +1,81 @@
-// This file is part of the uniquadev/RobloxDumper and is licensed under MIT License; see LICENSE.txt for details
+// Injector/main.cpp
 
 #include "Process.h"
 #include <filesystem>
+#include <vector>
+#include <iostream>
+#include <commdlg.h> // Include the common dialog box library
 
-/*
-* simple ExRemoteThread injection method
-*/
-DWORD InjectLL(const HANDLE Proc, const char* Path)
-{
-	const auto Loc = VirtualAllocEx(Proc, 0, MAX_PATH, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-	if (Loc == nullptr)
-		return 4003;
-
-	if (!WriteProcessMemory(Proc, (LPVOID)Loc, Path, MAX_PATH, 0))
-		return 4004;
-
-	const auto Thread = CreateRemoteThread(Proc, 0, 0, (LPTHREAD_START_ROUTINE)LoadLibraryA, Loc, 0, 0);
-	if (Thread == nullptr)
-		return 4005;
-
-	WaitForSingleObject(Thread, INFINITE);
-	DWORD ExitCode = 0;
-	GetExitCodeThread(Thread, &ExitCode);
-	CloseHandle(Thread);
-	VirtualFreeEx(Proc, Loc, 0, MEM_RELEASE);
-
-	return ExitCode;
+// Function to log to console
+void Log(const char* message) {
+    std::cout << message << std::endl;
 }
 
-std::filesystem::path GetBinPath()
-{
-	wchar_t Buffer[MAX_PATH];
-	GetModuleFileNameW(NULL, Buffer, MAX_PATH);
-	return std::filesystem::path(Buffer).parent_path();
+// Function to prompt the user to select a file
+std::wstring OpenFileSelector() {
+    OPENFILENAME ofn;       // common dialog box structure
+    wchar_t szFile[260];    // buffer for file name
+    HWND hwnd = NULL;       // owner window
+
+    // Initialize OPENFILENAME
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFile = szFile;
+    // Set lpstrFile[0] to '\0' so that GetOpenFileName does not use the contents of szFile to initialize itself.
+    ofn.lpstrFile[0] = '\0';
+    ofn.nMaxFile = sizeof(szFile);
+    ofn.lpstrFilter = L"Executable Files\0*.EXE\0";
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFileTitle = NULL;
+    ofn.nMaxFileTitle = 0;
+    ofn.lpstrInitialDir = NULL;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+
+    if (GetOpenFileName(&ofn) == TRUE) {
+        return ofn.lpstrFile;
+    }
+    return L"";
 }
 
+int main() {
+    Log("Starting Roblox DLL Injector...");
 
-int main()
-{
-	auto dll = GetBinPath() / "Dumper.dll";
+    // Try to find the Roblox process
+    Process* robloxProcess = Process::ByName(L"RobloxPlayerBeta.exe");
 
-	if (!std::filesystem::exists(dll))
-	{
-		std::cout << "Make sure to compile dll" << std::endl;
-		return 404;
-	}
+    // If the Roblox process is not found, prompt user to select the file
+    if (!robloxProcess) {
+        Log("RobloxPlayerBeta.exe not found. Please select the executable.");
+        std::wstring manualPath = OpenFileSelector();
+        if (!manualPath.empty()) {
+            robloxProcess = Process::ByName(manualPath.c_str());
+        }
+    }
 
-	Process* ac = nullptr;
-	while (!ac)
-		ac = Process::ByName(L"RobloxPlayerBeta.exe");
+    // If the Roblox process is still not found, exit
+    if (!robloxProcess) {
+        Log("RobloxPlayerBeta.exe not selected or found. Exiting injector.");
+        return -1;
+    }
 
-	
-	InjectLL(ac->ph, dll.string().c_str());
+    Log("Roblox process found. Attempting to inject Dumper.dll...");
+
+    // Get the full path to the Dumper.dll
+    auto dllPath = GetBinPath() / "Dumper.dll";
+    if (!std::filesystem::exists(dllPath)) {
+        Log("Dumper.dll not found. Make sure to compile the DLL.");
+        return -1;
+    }
+
+    // Attempt DLL injection
+    DWORD result = InjectLL(robloxProcess->ph, dllPath.string().c_str());
+    if (result == 0) {
+        Log("Dumper.dll successfully injected.");
+    } else {
+        Log(("Injection failed with error code: " + std::to_string(result)).c_str());
+    }
+
+    return 0;
 }
+
